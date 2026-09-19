@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════
+# KRISHNA — .gitignore (Android + OS + IDE)
+# ═══════════════════════════════════════════════════════════
+
+# Gradle
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.code-workspace
+
+# Android build output
+*.apk
+*.aab
+*.ap_
+*.dex
+*.keystore
+*.jks
+
+# Native
+.cxx/
+.externalNativeBuild/
+ndk-bin/
+
+# Captures
+captures/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log

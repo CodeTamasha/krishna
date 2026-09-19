@@ -1,11 +1,14 @@
 package com.krishna.assistant;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.PixelFormat;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -21,7 +24,6 @@ import android.widget.ImageView;
 import androidx.core.app.NotificationCompat;
 
 /**
- * ═══════════════════════════════════════════════════════════
  * FLOATING BUTTON SERVICE — har app ke upar mic button
  *
  * - 60dp circular button, DRAGGABLE (kahin bhi le jao)
@@ -29,11 +31,15 @@ import androidx.core.app.NotificationCompat;
  * - LONG PRESS → Krishna main screen khulti hai
  * - Colors:  GRAY idle • GREEN pulse listening • BLUE rotate thinking • GOLD speaking
  * - Foreground service + persistent notification (ColorOS se bachav)
- * ═══════════════════════════════════════════════════════════
+ *
+ * v1.1.0: mic permission na ho to tap par app khulti hai (permission
+ * wahan se deni padti hai) — Android 12+ par bina mic permission ke
+ * voice service start karna crash karta tha.
  */
 public class FloatingButtonService extends Service {
 
     private static final String TAG = "KrishnaFloat";
+
     private static volatile FloatingButtonService instance;
 
     public static FloatingButtonService get() {
@@ -64,6 +70,7 @@ public class FloatingButtonService extends Service {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        Constants.init(this);
         DeviceUtils.ensureChannels(this);
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         Log.i(TAG, "FloatingButtonService created");
@@ -162,6 +169,16 @@ public class FloatingButtonService extends Service {
     private void onButtonTap() {
         ui.post(() -> {
             try {
+                // ⚡ Mic permission na ho to app khulti hai (Android 12+ par
+                // bina mic ke voice service start = crash). Wahan se permission do.
+                if (Build.VERSION.SDK_INT >= 31
+                        && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                                != PackageManager.PERMISSION_GRANTED) {
+                    Log.w(TAG, "Mic permission missing — app khol rahe hain");
+                    startActivity(new Intent(this, MainActivity.class)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    return;
+                }
                 VoiceListenerService v = VoiceListenerService.get();
                 if (v != null && v.isLive()) {
                     v.stopEverything();
@@ -274,10 +291,9 @@ public class FloatingButtonService extends Service {
 
     /**
      * INFINITE REPEAT — REFLACTION se.
-     * Kyu: is machine ke android.jar me AnimatorSet par setRepeatCount method
-     * missing hai (jar incomplete hai). Reflection se compile har jagah hota hai,
+     * Kyu: user ke IDE ke android.jar me AnimatorSet par setRepeatCount method
+     * missing ho sakta hai (jar incomplete hai). Reflection se compile har jagah hota hai,
      * aur asli phone par method maujood hai to animation waise hi loop karega.
-     * Chahe kabhi na bhi chale to animation ek baar chalegi — bas visual hi hai.
      */
     private static void setInfiniteRepeat(android.animation.Animator animator) {
         try {
@@ -298,7 +314,7 @@ public class FloatingButtonService extends Service {
                 .setContentText(getString(R.string.notif_active_text))
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .addAction(new NotificationCompat.Action(0, getString(R.string.notif_stop), stopPi))
+                .addAction(new NotificationCompat.Action.Builder(0, getString(R.string.notif_stop), stopPi).build())
                 .build();
     }
 

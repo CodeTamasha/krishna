@@ -1,5 +1,7 @@
 package com.krishna.assistant;
 
+import android.content.Context;
+
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -11,24 +13,33 @@ import java.util.Map;
  * ═══════════════════════════════════════════════════════════
  * 🔑 SIRS YEH 4 LINES EDIT KARNI HAIN (keys daalne ke liye):
  *   1. MERCURY_API_KEY   → Inception Labs ki key
- *   2. FISH_API_KEY      → Fish Audio ki key
+ *   2. FISH_API_KEY      → Fish Audio ki key (sirf TTS_ENGINE="fish" me chahiye)
  *   3. FIREBASE_DB_URL   → Firebase database URL (https://xxx-default-rtdb.firebaseio.com)
  *   4. FIREBASE_SECRET   → Firebase secret (rules public hain to KHALI chhod do)
+ *
+ * ⚡ SPEED: TTS_ENGINE = "android" (default) — instant + offline voice.
+ *          "fish" — Fish Audio premium voice (thoda late — network se MP3 aata hai).
  * ═══════════════════════════════════════════════════════════
  */
 public class Constants {
 
     // ═══════════════════ 🔑 API KEYS YAHAN DAALO ═══════════════════
     public static final String MERCURY_API_KEY = "";   // ← Mercury AI key yahan paste karo
-    public static final String FISH_API_KEY = "";      // ← Fish Audio TTS key yahan paste karo
+    public static final String FISH_API_KEY = "";      // ← Fish Audio TTS key (sirf "fish" engine ke liye)
     public static final String FIREBASE_DB_URL = "";   // ← Firebase database URL yahan paste karo
     public static final String FIREBASE_SECRET = "";   // ← Firebase secret (public rules ho to khali chhodo)
 
+    // ═══════════════ TTS ENGINE (SPEED ka main control) ═══════════════
+    // "android" = INSTANT + OFFLINE (default — JARVIS jaisi speed ke liye)
+    // "fish"    = Fish Audio premium voice (MP3 network se aata hai, 2-10s lag sakti hai)
+    public static final String TTS_ENGINE = "android";
+
     // ═══════════════ MERCURY AI (The Brain) ═══════════════
     public static final String MERCURY_MODEL = "mercury-2";
-    public static final int MERCURY_MAX_TOKENS = 4000;
+    public static final int MERCURY_MAX_TOKENS = 800;      // voice reply chhota hota hai — 800 kaafi (latency kam)
+    public static final double MERCURY_TEMPERATURE = 0.5;  // JSON action ke liye stable output
 
-    // ═══════════════ FISH AUDIO TTS (The Voice) ═══════════════
+    // ═══════════════ FISH AUDIO TTS (premium voice option) ═══════════════
     public static final String FISH_MODEL = "s2.1-pro-free";
     public static final String FISH_REFERENCE_ID = "bcfb8b1e89984ac8ba6896bced34f7d0";
 
@@ -44,9 +55,12 @@ public class Constants {
     public static final int STATE_SPEAKING = 4;      // TTS play ho raha hai
     public static final int STATE_STOPPING = 5;      // live mode band ho raha hai
 
-    // ═══════════════ WAKE WORDS (partial result me koi bhi mile to wake) ═══════════════
+    // ═══════════════ WAKE WORDS ═══════════════
+    // SIRF Latin letters — kyunki STT (en-IN) results Latin me deta hai,
+    // Devanagari entries kabhi match nahi hoti thi (purana bug).
     public static final String[] WAKE_WORDS = {
-            "krishna", "krisna", "krishan", "krishaan", "कृष्ण", "कृष्ण"
+            "krishna", "krisna", "krishan", "krishaan",
+            "crisna", "krisan", "khishna", "crishna"
     };
 
     // ═══════════════ LIVE MODE BAND KARNE KE PHRASES ═══════════════
@@ -66,11 +80,12 @@ public class Constants {
     };
 
     // ═══════════════ NOTIFICATIONS PADHNE KE TRACKED APPS ═══════════════
+    // (Instagram hata diya — story/like notifications spam the aur turant
+    //  "message aaya" wali voice ko ghatiyaa kar dete the)
     public static final List<String> TRACKED_APPS = Arrays.asList(
             "com.whatsapp", "com.whatsapp.w4b",
             "com.google.android.apps.messaging", "com.android.mms",
             "org.telegram.messenger",
-            "com.instagram.android",
             "com.android.dialer", "com.google.android.dialer"
     );
 
@@ -130,8 +145,31 @@ public class Constants {
         APP_PACKAGES.put("weather", "com.google.android.apps.weather");
     }
 
-    // ═══════════════ MUTE STATE (runtime) ═══════════════
+    // ═══════════════ MUTE STATE (ab SharedPreferences me persist hota hai) ═══════════════
     private static volatile boolean muted = false;
-    public static void setMuted(boolean v) { muted = v; }
-    public static boolean isMuted() { return muted; }
+    private static Context appCtx = null;
+
+    /** Kisi bhi service/activity ke onCreate me call karo (idempotent).
+     *  App restart ke baad bhi mute state yaad rahega. */
+    public static void init(Context ctx) {
+        appCtx = ctx.getApplicationContext();
+        try {
+            muted = appCtx.getSharedPreferences("krishna_prefs", Context.MODE_PRIVATE)
+                    .getBoolean("krishna_muted", false);
+        } catch (Exception ignored) {}
+    }
+
+    public static void setMuted(boolean v) {
+        muted = v;
+        try {
+            if (appCtx != null) {
+                appCtx.getSharedPreferences("krishna_prefs", Context.MODE_PRIVATE)
+                        .edit().putBoolean("krishna_muted", v).apply();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    public static boolean isMuted() {
+        return muted;
+    }
 }

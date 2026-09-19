@@ -16,13 +16,17 @@ import java.util.regex.Pattern;
  *
  * AI ka format:
  *   "Sure Boss! WhatsApp khol raha hoon.
- *    {\"action\": \"open_app\", \"app\": \"whatsapp\"}"
+ *    {"action": "open_app", "app": "whatsapp"}"
+ *
+ * fix7 (v1.1.0):
+ *   - PURANA BUG: yahan ek nested ParsedResponse class thi jiski wajah se
+ *     ActionExecutor (jo top-level ParsedResponse expect karta tha) ke saath
+ *     COMPILE ERROR hoti thi. Ab sirf top-level com.krishna.assistant.ParsedResponse
+ *     use hota hai — ek hi class, koi duplicate nahi.
  *
  * Naya (fix6):
  *   - AI kabhi galti se 2 JSON blocks de deta hai (open_app +
- *     send_message). Pehle sirf pehla block hata jata tha — baaki
- *     JSON TTS me spoken text ki tarah BOLA jata tha. Ab SAARE
- *     JSON blocks spoken text se hatate hain.
+ *     send_message). Saare JSON blocks spoken text se hatate hain.
  *   - Agar blocks me send_message hai to usko PRIORITY milti hai
  *     (kyunki send_message khud WhatsApp bhi khol deta hai).
  *
@@ -35,16 +39,9 @@ public class CommandParser {
 
     private static final String TAG = "KrishnaParser";
 
-    public static class ParsedResponse {
-        public String spokenText;              // jo TTS se bolna hai
-        public String action;                  // action name (null agar koi nahi)
-        public final java.util.HashMap<String, String> params = new java.util.HashMap<>();
-        public boolean isAction = false;
-    }
-
     /**
      * AI response parse karo.
-     * Saare flat JSON action blocks dhundh-te hain:
+     * Saare flat JSON action blocks dhundhte hain:
      *  1. Spoken text me se SAB hata do (JSON kabhi spoken nahi hona chahiye)
      *  2. Ek action choose karo: agar koi bhi block send_message hai to wo,
      *     warna pehla valid block.

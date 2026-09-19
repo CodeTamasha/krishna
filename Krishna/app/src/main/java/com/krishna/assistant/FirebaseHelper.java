@@ -44,6 +44,12 @@ public class FirebaseHelper {
     private static final String TAG = "KrishnaFirebase";
     private static final FirebaseHelper INSTANCE = new FirebaseHelper();
 
+    // Message keys ke liye sequence — "msg_" + millis AKAHI HAI kyunki
+    // user + assistant message back-to-back save hote hain aur same millisecond
+    // me dono ka key same ho jata tha → doosra PUT pehle wale ko overwrite
+    // kar deta tha (message data loss). Ab har key unique hai.
+    private static final java.util.concurrent.atomic.AtomicLong MSG_SEQ = new java.util.concurrent.atomic.AtomicLong();
+
     public static FirebaseHelper get() {
         return INSTANCE;
     }
@@ -186,11 +192,14 @@ public class FirebaseHelper {
         httpPut(urlFor(deviceId, "profile"), o.toString());
     }
 
-    /** Har interaction ke baad last_active update karo */
+    /**
+     * Har interaction ke baad last_active update karo.
+     * (Purane code me yeh poora profile GET + PUT karta tha — har command par
+     * 2 extra network calls. Ab sirf last_active leaf par 1 hi PUT hota hai.)
+     */
     public void touchLastActive(String deviceId) {
         if (!isConfigured()) return;
-        UserProfile p = getProfile(deviceId);
-        saveProfile(deviceId, p);
+        httpPut(urlFor(deviceId, "profile/last_active"), "\"" + DeviceUtils.nowIso() + "\"");
     }
 
     // ═══════════════ SHORT-TERM MEMORY (compressed summary) ═══════════════
@@ -286,7 +295,7 @@ public class FirebaseHelper {
         o.addProperty("text", text);
         o.addProperty("time", DeviceUtils.nowIso());
         if (action != null) o.addProperty("action", action);
-        String key = "msg_" + System.currentTimeMillis();
+        String key = "msg_" + System.currentTimeMillis() + "_" + MSG_SEQ.incrementAndGet();
         httpPut(urlFor(deviceId, "conversations/current_session/messages/" + key), o.toString());
     }
 

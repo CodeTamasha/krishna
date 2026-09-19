@@ -1,45 +1,116 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="com.krishna.assistant">
 
-    <!-- ══════════ BASIC ══════════ -->
+    <!-- ═══════════════ BASIC ═══════════════ -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- ══════════ VOICE ══════════ -->
+    <!-- ═══════════════ VOICE ═══════════════ -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_STATE" />
+    <!-- (purane code me yahan "MODIFY_AUDIO_STATE" tha — koi aisi
+         permission exist nahi karti. Sahi naam MODIFY_AUDIO_SETTINGS hai) -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
-    <!-- ══════════ FOREGROUND SERVICES (24/7 background) ══════════ -->
+    <!-- ═══════════════ FOREGROUND SERVICES (24/7 background) ═══════════════ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
-    <!-- ══════════ OVERLAY + SYSTEM ══════════ -->
+    <!-- ═══════════════ OVERLAY + SYSTEM ═══════════════ -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- ══════════ PHONE / CALLS / CONTACTS ══════════ -->
+    <!-- ═══════════════ PHONE / CALLS / CONTACTS ═══════════════ -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- ══════════ BATTERY + BOOT (OPPO/ColorOS ke liye) ══════════ -->
+    <!-- ═══════════════ BATTERY + BOOT (OPPO/ColorOS ke liye) ═══════════════ -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- ══════════ WIFI + BLUETOOTH TOGGLES ══════════ -->
+    <!-- ═══════════════ WIFI + BLUETOOTH TOGGLES ═══════════════ -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
-    <!-- ══════════ FLASHLIGHT (camera torch) ══════════ -->
+    <!-- ═══════════════ FLASHLIGHT (camera torch) ═══════════════ -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- ═══════════════ PACKAGE VISIBILITY (Android 11+) ═══════════════
+         ⭐ BINA ISKE Android 11+ par getInstalledPackages() khali list
+         deta hai aur getLaunchIntentForPackage() null return karta hai
+         → "koi app open nahi ho rahi" wali problem isi ki wajah se thi.
+         Krishna ek assistant hai — use har app dhoondhna + kholna padta hai. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- <queries> = extra safety — agar kabhi QUERY_ALL_PACKAGES hatana
+         pade to installed apps ki list sirf yahan di gayi packages ke liye
+         milegi. Main apps + call/dial intents included hain. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.CALL" />
+        </intent>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.android.chrome" />
+        <package android:name="com.android.settings" />
+        <package android:name="com.android.camera" />
+        <package android:name="com.google.android.calculator" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.google.android.dialer" />
+        <package android:name="com.android.dialer" />
+        <package android:name="com.google.android.contacts" />
+        <package android:name="com.google.android.apps.messaging" />
+        <package android:name="com.android.mms" />
+        <package android:name="com.google.android.gm" />
+        <package android:name="com.facebook.katana" />
+        <package android:name="com.twitter.android" />
+        <package android:name="com.amazon.mShop.android.shopping" />
+        <package android:name="com.flipkart.android" />
+        <package android:name="com.uber.client" />
+        <package android:name="com.olacabs.customer" />
+        <package android:name="in.swiggy" />
+        <package android:name="com.spotify.music" />
+        <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.amazon.avod.thirdpartyclient" />
+        <package android:name="in.startv.hotstar" />
+        <package android:name="com.jiocinema.android" />
+        <package android:name="com.google.android.apps.photos" />
+        <package android:name="com.google.android.documentsui" />
+        <package android:name="com.android.vending" />
+        <package android:name="com.truecaller" />
+        <package android:name="com.linkedin.android" />
+        <package android:name="com.reddit.frontpage" />
+        <package android:name="com.sharechat" />
+        <package android:name="com.pinterest" />
+        <package android:name="com.ebay.mobile" />
+        <package android:name="com.olxindia" />
+        <package android:name="net.one97.paytm" />
+        <package android:name="com.google.android.apps.nbu.paisa" />
+        <package android:name="in.phonepe.phonepe" />
+        <package android:name="com.transitapp.moovit" />
+        <package android:name="com.google.android.apps.weather" />
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -49,7 +120,7 @@
         android:theme="@style/Theme.Krishna"
         android:usesCleartextTraffic="false">
 
-        <!-- ══════════ MAIN ACTIVITY ══════════ -->
+        <!-- ═══════════════ MAIN ACTIVITY ═══════════════ -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -61,26 +132,26 @@
             </intent-filter>
         </activity>
 
-        <!-- ══════════ 1. FLOATING MIC BUTTON (overlay) ══════════ -->
+        <!-- ═══════════════ 1. FLOATING MIC BUTTON (overlay) ═══════════════ -->
         <service
             android:name=".FloatingButtonService"
             android:exported="false"
             android:stopWithTask="false" />
 
-        <!-- ══════════ 2. VOICE LISTENER (background mic + wake word) ══════════ -->
+        <!-- ═══════════════ 2. VOICE LISTENER (background mic + wake word) ═══════════════ -->
         <service
             android:name=".VoiceListenerService"
             android:exported="false"
             android:foregroundServiceType="microphone"
             android:stopWithTask="false" />
 
-        <!-- ══════════ 3. TTS PLAYBACK (Fish Audio) ══════════ -->
+        <!-- ═══════════════ 3. TTS PLAYBACK (Android TTS default + Fish Audio option) ═══════════════ -->
         <service
             android:name=".AudioPlaybackService"
             android:exported="false"
             android:stopWithTask="false" />
 
-        <!-- ══════════ 4. ACCESSIBILITY SERVICE (phone control engine) ══════════ -->
+        <!-- ═══════════════ 4. ACCESSIBILITY SERVICE (phone control engine) ═══════════════ -->
         <service
             android:name=".KrishnaAccessibilityService"
             android:exported="false"
@@ -94,7 +165,7 @@
                 android:resource="@xml/accessibility_config" />
         </service>
 
-        <!-- ══════════ 5. NOTIFICATION LISTENER (messages padhna) ══════════ -->
+        <!-- ═══════════════ 5. NOTIFICATION LISTENER (messages padhna) ═══════════════ -->
         <service
             android:name=".NotificationListenerService"
             android:exported="false"
@@ -105,7 +176,7 @@
             </intent-filter>
         </service>
 
-        <!-- ══════════ BOOT RECEIVER (phone restart par khud start) ══════════ -->
+        <!-- ═══════════════ BOOT RECEIVER (phone restart par khud start) ═══════════════ -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true">

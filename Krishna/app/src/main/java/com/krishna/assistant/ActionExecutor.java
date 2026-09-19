@@ -19,7 +19,15 @@ import java.util.Map;
  * ACTION EXECUTOR — AI ka action JSON phone par chalaao
  *
  * Yeh pipeline thread par chalta hai (blocking OK — sleeps allowed).
- * Return: true = kaam ho gaya, false = nahi hua (pipeline apology bolega).
+ * Return: true = kaam ho gaya, false = nahi hua.
+ *
+ * v1.1.0 FIXES:
+ *  - ⭐ open_app ab ACCESSIBILITY SERVICE KE BINAA chalta hai
+ *    (AppLauncher) — "koi app open nahi ho rahi" fix.
+ *  - ⭐ call_contact ab Pehle Contacts database se direct number
+ *    milata hai (ContactResolver) — UI-clicking sirf fallback.
+ *  - "explained" flag: agar action khud bataya ki kyun fail hua
+ *    (jaise "app nahi mili"), pipeline apni generic apology nahi bolta.
  *
  * SAARE actions error-safe hain — koi bhi action crash nahi karta.
  * ═══════════════════════════════════════════════════════════
@@ -31,6 +39,7 @@ public class ActionExecutor {
     private final Context ctx;
     private final KrishnaAccessibilityService acc;
     private final AudioPlaybackService audio;
+    private volatile boolean explained = false; // action ne khud user ko bataya?
 
     public ActionExecutor(Context ctx) {
         this.ctx = ctx.getApplicationContext();
@@ -38,17 +47,24 @@ public class ActionExecutor {
         this.audio = AudioPlaybackService.get();
     }
 
+    /** Action ne khud user ko fail ka reason boliya? (pipeline generic apology skip kare) */
+    public boolean wasExplained() {
+        return explained;
+    }
+
     /**
      * Accessibility service connected NAHI hai?
-     * Yahi wajah hai jiski wajah se WhatsApp/YouTube/call jaise kaam nahi hote
-     * (reinstall ke baad OPPO aksar accessibility service band kar deta hai).
-     * User ko BOLA hua clear message dete hain taaki wo khud on kar sake.
+     * WhatsApp/YouTube/UI controls ke liye yeh chahiye (OPPO reinstall ke
+     * baad aksar band kar deta hai). User ko BOLA hua clear message dete hain.
+     * (App-open aur calls ab iske bina bhi chalte hain)
      */
     private boolean accMissing() {
         if (acc != null) return false;
         Log.w(TAG, "⚠️ Accessibility service CONNECTED nahi hai! Phone Settings → Accessibility → 'Krishna' ON karo.");
+        explained = true;
         if (audio != null) {
-            audio.speakBlocking("Boss, meri Accessibility service abhi off hai. Phone ke Settings me Accessibility chalo aur Krishna ko on karo, phir dobara try karo.");
+            audio.speakBlocking("Boss, meri Accessibility service abhi off hai. Phone ke Settings me "
+                    + "Accessibility chalo aur Krishna ko on karo, phir dobara try karo.");
         }
         return true;
     }
@@ -67,7 +83,7 @@ public class ActionExecutor {
 
     public boolean execute(ParsedResponse p) {
         String action = p.action == null ? "" : p.action;
-        Log.i(TAG, "⚡ Execute: " + action + " params=" + p.params);
+        if (BuildConfig.DEBUG) Log.i(TAG, "⚡ Execute: " + action + " params=" + p.params);
         try {
             switch (action) {
                 case "open_app":
@@ -109,11 +125,20 @@ public class ActionExecutor {
                     return doBt(str(p, "state"));
                 case "toggle_flashlight":
                     if (accMissing()) return false;
-                    acc.toggleFlashlight(str(p, "state"));
-                    return true;
+                    boolean torchOk = acc.toggleFlashlight(str(p, "state"));
+                    if (!torchOk) {
+                        explained = true;
+                        if (audio != null) audio.speakBlocking("Boss, torch on nahi ho paya. Camera app se manually kar lo.");
+                    }
+                    return torchOk;
                 case "take_screenshot":
                     if (accMissing()) return false;
-                    return acc.takeScreenshot();
+                    boolean shotOk = acc.takeScreenshot();
+                    if (!shotOk && Build.VERSION.SDK_INT < 29) {
+                        explained = true;
+                        if (audio != null) audio.speakBlocking("Boss, screenshot sirf Android 10+ par hi leta hoon.");
+                    }
+                    return shotOk;
                 case "lock_screen":
                     if (accMissing()) return false;
                     acc.lockScreen();
@@ -132,22 +157,21 @@ public class ActionExecutor {
         }
     }
 
-    // ═══════════════ APP OPEN ═══════════════
+    // ═══════════════ APP OPEN (⭐ accessibility ke bina) ═══════════════
 
     private boolean doOpenApp(String name) {
         if (name.isEmpty()) return false;
-        if (accMissing()) return false;
-        String pkg = acc.resolveApp(name);
+        String pkg = AppLauncher.resolveApp(ctx, name);
         if (pkg == null) {
             Log.w(TAG, "App not found: " + name);
+            explained = true;
+            if (audio != null) audio.speakBlocking("Boss, \"" + name + "\" app mujhe device par nahi mili.");
             return false;
         }
-        boolean ok = acc.openApp(pkg);
+        boolean ok = AppLauncher.openApp(ctx, pkg);
         if (ok) {
             try {
-                String deviceId = DeviceUtils.getDeviceId(ctx);
-                FirebaseHelper.get().trackAppOpened(deviceId, name);
-                FirebaseHelper.get().incrementCommands(deviceId);
+                FirebaseHelper.get().trackAppOpened(DeviceUtils.getDeviceId(ctx), name);
             } catch (Exception ignored) {}
         }
         return ok;
@@ -165,6 +189,9 @@ public class ActionExecutor {
         // (System prompt me bhi AI ko mana kiya gaya hai)
         if (containsDevanagari(contact) || containsDevanagari(message)) {
             Log.w(TAG, "Devanagari detected — skip (phone English script me hai)");
+            explained = true;
+            if (audio != null) audio.speakBlocking("Boss, phone me message English letters me hi type karta hoon. "
+                    + "Waise bolo, main waise hi bhej dunga.");
             return false;
         }
 
@@ -185,16 +212,28 @@ public class ActionExecutor {
         return acc.searchYouTube(query);
     }
 
-    // ═══════════════ CALL (number ya contact name) ═══════════════
+    // ═══════════════ CALL (⭐ direct number / contacts, UI fallback) ═══════════════
 
     private boolean doCall(String nameOrNumber) {
         if (nameOrNumber.isEmpty()) return false;
-        if (accMissing()) return false;
         String digits = nameOrNumber.replaceAll("[^0-9+]", "");
+        // 1) Number diya hai → seedha call (accessibility ki zaroorat NAHI)
         if (DeviceUtils.isPhoneNumber(digits)) {
-            return acc.callByNumber(digits);
+            return ContactResolver.callNumber(ctx, digits);
         }
-        return acc.callContact(nameOrNumber);
+        // 2) Naam hai → Contacts database se best match number (fast + reliable)
+        String num = ContactResolver.findNumberByName(ctx, nameOrNumber);
+        if (num != null) {
+            return ContactResolver.callNumber(ctx, num);
+        }
+        // 3) Contacts me nahi mila → dialer UI me search karo (accessibility chahiye)
+        if (accMissing()) return false;
+        boolean ok = acc.callContact(nameOrNumber);
+        if (!ok) {
+            explained = true;
+            if (audio != null) audio.speakBlocking("Boss, \"" + nameOrNumber + "\" contact mujhe nahi mila.");
+        }
+        return ok;
     }
 
     // ═══════════════ VOLUME ═══════════════
@@ -236,6 +275,8 @@ public class ActionExecutor {
                         Uri.parse("package:" + ctx.getPackageName()))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             } catch (Exception ignored) {}
+            explained = true;
+            if (audio != null) audio.speakBlocking("Boss, brightness badalne ke liye WRITE_SETTINGS permission chahiye. Settings khol di hain.");
             return false;
         }
         try {
@@ -256,6 +297,8 @@ public class ActionExecutor {
     // ═══════════════ WIFI ═══════════════
 
     private boolean doWifi(String state) {
+        // Note: Android 10+ par third-party apps direct WiFi toggle nahi
+        // kar sakte (system restriction) — isliye fail ho to settings kholte hain
         try {
             WifiManager wm = (WifiManager) ctx.getSystemService(Context.WIFI_SERVICE);
             if (wm == null) return false;
@@ -264,11 +307,13 @@ public class ActionExecutor {
             boolean ok = wm.setWifiEnabled(on);
             KrishnaAccessibilityService.sleep(800);
             if (wm.isWifiEnabled() == on) return ok;
-            // Fail ho to settings khol do
             try {
                 ctx.startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             } catch (Exception ignored) {}
+            explained = true;
+            if (audio != null) audio.speakBlocking("Boss, WiFi settings khol di hain — wahan se "
+                    + (on ? "on" : "off") + " kar lo (Android iska direct control nahi deta).");
             return false;
         } catch (Exception e) {
             try {
@@ -312,12 +357,12 @@ public class ActionExecutor {
     private boolean doReadNotifications() {
         try {
             String[] last = FirebaseHelper.get().getLastNotification(DeviceUtils.getDeviceId(ctx));
+            if (audio == null) return false;
             if (last != null) {
-                String s = "Boss, " + last[0] + " par " + last[1] + " ka message tha: " + last[2];
-                if (audio != null) audio.speakBlocking(s);
-                return true;
+                audio.speakBlocking("Boss, " + last[0] + " par " + last[1] + " ka message tha: " + last[2]);
+            } else {
+                audio.speakBlocking("Boss, abhi koi naya message nahi aaya.");
             }
-            if (audio != null) audio.speakBlocking("Boss, abhi koi naya message nahi aaya.");
             return true;
         } catch (Exception e) {
             Log.e(TAG, "read notifications fail", e);

@@ -1,5 +1,6 @@
 package com.krishna.assistant;
 
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.ComponentName;
@@ -11,6 +12,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.PowerManager;
 import android.provider.Settings;
+
+import androidx.core.app.NotificationCompat;
 
 /**
  * DEVICE UTILS — device ID, OPPO detect, notification channels,
@@ -51,6 +54,29 @@ public class DeviceUtils {
                 main.setShowBadge(false);
                 nm.createNotificationChannel(main);
             }
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * ⭐ IMPORTANT NOTIFICATION — jab kuch ghalat ho (jaise OPPO ne
+     * accessibility service band kar di) to user ko turant pata chale,
+     * warna wo sochega Krishna kharaab hai.
+     * POST_NOTIFICATIONS permission na ho to silently fail (log me rahega).
+     */
+    public static void notifyImportant(Context ctx, String title, String text) {
+        try {
+            ensureChannels(ctx);
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            Notification n = new NotificationCompat.Builder(ctx, CHANNEL_MAIN)
+                    .setSmallIcon(R.drawable.ic_mic)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true)
+                    .build();
+            nm.notify(900 + (int) (System.currentTimeMillis() % 1000), n);
         } catch (Exception ignored) {}
     }
 
@@ -112,10 +138,14 @@ public class DeviceUtils {
         return d.length() >= 10 && d.length() <= 15 && d.matches("[+]?[0-9]+");
     }
 
-    /** Abhi ka time ISO format me (Firebase timestamps ke liye) */
+    /**
+     * Abhi ka time, DEVICE ke apne timezone me (purane code me "IST" hardcode
+     * tha — phone kisi aur timezone me ho to AI ko galat time context milta tha).
+     */
     public static String nowIso() {
         try {
-            return java.time.Instant.now().toString();
+            return java.time.ZonedDateTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm zzz", java.util.Locale.US));
         } catch (Exception e) {
             return String.valueOf(System.currentTimeMillis());
         }
