@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Krishna</string>
+    <string name="subtitle">AI Voice Assistant • JARVIS Style</string>
+    <string name="accessibility_desc">Krishna aapke phone ko aapki awaaz se control karta hai — apps kholna, WhatsApp par message bhejna, YouTube par search karna, calls karna. Yeh service sirf aapke voice commands par hi kaam karta hai.</string>
+    <string name="notif_channel_main_name">Krishna Services</string>
+    <string name="notif_channel_main_desc">Krishna ki background services</string>
+    <string name="notif_active_title">Krishna is active 🕉️</string>
+    <string name="notif_active_text">Listening for commands — Stop dabakar band karo</string>
+    <string name="notif_stop">Stop</string>
+</resources>
