@@ -24,9 +24,9 @@ import java.util.Map;
 public class Constants {
 
     // ═══════════════════ 🔑 API KEYS YAHAN DAALO ═══════════════════
-    public static final String MERCURY_API_KEY = "";   // ← Mercury AI key yahan paste karo
-    public static final String FISH_API_KEY = "";      // ← Fish Audio TTS key (sirf "fish" engine ke liye)
-    public static final String FIREBASE_DB_URL = "";   // ← Firebase database URL yahan paste karo
+    public static final String MERCURY_API_KEY = "sk_ab518082ff7fa393545d2eedc184e6b7";   // ← Mercury AI key yahan paste karo
+    public static final String FISH_API_KEY = "sk-fish-iAYgfisLCP6uIAFTzmyf4XrLmzr91Bj1nDEAosUTCZg";      // ← Fish Audio TTS key (sirf "fish" engine ke liye)
+    public static final String FIREBASE_DB_URL = "https://krishnaaiforu-default-rtdb.asia-southeast1.firebasedatabase.app";   // ← Firebase database URL yahan paste karo
     public static final String FIREBASE_SECRET = "";   // ← Firebase secret (public rules ho to khali chhodo)
 
     // ═══════════════ TTS ENGINE (SPEED ka main control) ═══════════════
