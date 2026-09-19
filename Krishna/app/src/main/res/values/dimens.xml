@@ -1,6 +1,0 @@
-<resources>
-    <dimen name="fab_size">88dp</dimen>
-    <dimen name="overlay_btn_size">60dp</dimen>
-    <dimen name="bubble_padding">12dp</dimen>
-    <dimen name="screen_margin">16dp</dimen>
-</resources>
