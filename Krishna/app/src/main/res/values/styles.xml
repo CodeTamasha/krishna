@@ -1,0 +1,13 @@
+<resources>
+    <!-- Dark + Gold theme (Krishna / divine look) -->
+    <style name="Theme.Krishna" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">@color/krishna_gold</item>
+        <item name="colorPrimaryVariant">@color/krishna_black</item>
+        <item name="colorOnPrimary">@color/krishna_black</item>
+        <item name="colorSecondary">@color/krishna_cyan</item>
+        <item name="colorOnSecondary">@color/krishna_black</item>
+        <item name="android:windowBackground">@color/krishna_black</item>
+        <item name="android:statusBarColor">@color/krishna_black</item>
+        <item name="android:navigationBarColor">@color/krishna_black</item>
+    </style>
+</resources>
