@@ -11,33 +11,42 @@ import java.util.concurrent.Executors;
 
 /**
  * ═══════════════════════════════════════════════════════════
- * NOTIFICATION LISTENER — messages aate hi padho
+ * NOTIFICATION LISTENER — messages aate hi TURANT bolo
  *
  * TRACKED: WhatsApp, WhatsApp Business, SMS/Messages, Telegram,
- *          Instagram, Phone/Call
+ *          Phone/Call
  *
- * QUEUE LOGIC (user requirement):
+ * v1.1.0 FIXES:
+ *  - ⭐ INSTANT VOICE: purane code me agar AudioPlaybackService nahi
+ *    chal rahi thi (service killed / Krishna off), message CHUPCHAAP
+ *    drop ho jata tha. Ab audio service nahi hai to khud START karo
+ *    (startSafe) + wait + phir bolo. Message aate hi awaaz.
+ *  - Saara kaam background thread par — system ke binder thread ko
+ *    block nahi karte.
+ *  - Apni app ki notifications ignore (loop se bachav).
+ *
+ * QUEUE LOGIC:
  *  - Krishna IDLE hai → turant bolo
- *  - Krishna baat/kaam kar raha hai → queue me rakho,
- *    USKA KAAM KATME KE BAAD automatically padha jayega
- *  (AudioPlaybackService ki single queue yeh order guarantee karti hai)
+ *  - Krishna baat/kaam kar raha hai → uski line khatam hote hi yeh
+ *    bolo (single queue order sambhal leti hai)
  *
  * "kaunsa message aaya" → last notification wapas padhi jati hai
- * "iska reply kar"      → AI context me last notification hota hai,
- *                         wahi contact par reply bhej deta hai
+ * "iska reply kar"      → AI context me last notification hoti hai
  * ═══════════════════════════════════════════════════════════
  */
 public class NotificationListenerService extends android.service.notification.NotificationListenerService {
 
     private static final String TAG = "KrishnaNotif";
 
-    private final ExecutorService firebaseExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService bg = Executors.newSingleThreadExecutor();
 
     @Override
     public void onNotificationPosted(android.service.notification.StatusBarNotification sbn) {
         try {
             String pkg = sbn.getPackageName();
             if (pkg == null || !Constants.TRACKED_APPS.contains(pkg)) return;
+            // Apni hi notifications mat bolo (infinite loop se bachav)
+            if (pkg.equals(getPackageName())) return;
 
             Notification n = sbn.getNotification();
             if (n == null || n.extras == null) return;
@@ -62,34 +71,41 @@ public class NotificationListenerService extends android.service.notification.No
                 sender = text;
             }
 
-            String sentence;
-            if (appName.equals("Call")) {
+            final String sentence;
+            if ("Call".equals(appName)) {
                 sentence = "Boss, " + (title.isEmpty() ? "ek" : title) + " ki call aa rahi hai.";
             } else {
                 sentence = "Boss, " + appName + " par " + sender + " ka message aaya hai: " + text;
             }
-            Log.i(TAG, "📩 " + sentence);
+            if (BuildConfig.DEBUG) Log.i(TAG, "📩 " + sentence);
 
             final String fApp = appName;
             final String fSender = sender;
             final String fText = text;
 
-            // Firebase me save karo (background thread)
-            firebaseExecutor.submit(() -> {
+            // ⭐ SAARA KAAM BACKGROUND ME — aur voice GUARANTEED:
+            // audio service nahi hai to startSafe se khud start + wait
+            bg.submit(() -> {
+                // 1) Firebase me save karo (agar configured hai — memory ke liye)
                 try {
                     String deviceId = DeviceUtils.getDeviceId(NotificationListenerService.this);
                     FirebaseHelper.get().saveNotification(deviceId, fApp, fSender, fText);
                 } catch (Exception e) {
                     Log.e(TAG, "save notification fail", e);
                 }
+                // 2) TURANT bolo
+                try {
+                    AudioPlaybackService audio = AudioPlaybackService.get();
+                    if (audio == null) {
+                        audio = AudioPlaybackService.startSafe(NotificationListenerService.this);
+                    }
+                    if (audio != null) {
+                        audio.speak(sentence);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "speak notification fail", e);
+                }
             });
-
-            // Bolo — queue khud order sambhal legi:
-            // Krishna bol raha hai to pehle wo khatam, phir yeh message
-            AudioPlaybackService audio = AudioPlaybackService.get();
-            if (audio != null) {
-                audio.speak(sentence);
-            }
         } catch (Exception e) {
             Log.e(TAG, "onNotificationPosted fail", e);
         }
@@ -107,8 +123,6 @@ public class NotificationListenerService extends android.service.notification.No
                 return "WhatsApp";
             case "org.telegram.messenger":
                 return "Telegram";
-            case "com.instagram.android":
-                return "Instagram";
             case "com.google.android.apps.messaging":
                 return "Messages";
             case "com.android.mms":
@@ -128,7 +142,7 @@ public class NotificationListenerService extends android.service.notification.No
 
     @Override
     public void onDestroy() {
-        firebaseExecutor.shutdownNow();
+        bg.shutdownNow();
         super.onDestroy();
     }
 }

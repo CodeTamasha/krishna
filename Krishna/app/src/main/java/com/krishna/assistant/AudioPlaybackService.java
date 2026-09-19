@@ -3,9 +3,11 @@ package com.krishna.assistant;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.os.Build;
 import android.os.IBinder;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
@@ -24,33 +26,73 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * ═══════════════════════════════════════════════════════════
- * AUDIO PLAYBACK SERVICE — Fish Audio TTS + Android TTS fallback
+ * AUDIO PLAYBACK SERVICE — TTS (v1.1.0 — INSTANT SPEED)
+ *
+ * ⚡ SPEED FIX:
+ *   Purane code me har line ke liye FISH AUDIO se MP3 download hota tha
+ *   (2-10+ second network latency) → "tts bahut late aata tha".
+ *
+ *   Ab default engine = ANDROID TTS (instant + offline):
+ *     Constants.TTS_ENGINE = "android"  → seedha local TTS (default)
+ *     Constants.TTS_ENGINE = "fish"     → Fish Audio premium voice
+ *                                         (fail ho to Android TTS fallback)
  *
  * QUEUE SYSTEM:
  *  - Krishna bolte waqt naya message aaye to WO QUEUE me jaata hai
  *  - Jaise pehla khatam, waise agla — ek baar me do awaazein NAHI
- *  - Notifications bhi isi queue me jaate hain (order me)
+ *  - (Purana "suspend" system hata diya — message ab turant bolna chahiye,
+ *    queue sirf serialization ke liye hai)
  *
  * ECHO PREVENTION:
  *  - Yeh service tabhi bolti hai jab mic band hai
  *  - VoiceListenerService playback khatam hone ke BAAD hi sunne lagta hai
  *
- * Fish Audio fail ho → Android ka built-in TTS (robotic but chalega)
  * Volume: phone ki MEDIA volume follow karti hai (STREAM_MUSIC)
  * ═══════════════════════════════════════════════════════════
  */
 public class AudioPlaybackService extends Service {
 
     private static final String TAG = "KrishnaAudio";
+
     private static volatile AudioPlaybackService instance;
 
     public static AudioPlaybackService get() {
         return instance;
     }
 
+    /**
+     * ⭐ Service guaranteed start karo + instance ready hone ka wait.
+     * SIRF BACKGROUND THREAD se call karna (wait hota hai).
+     * NotificationListenerService yeh use karta hai taaki message aate hi
+     * voice ready ho — bina service ke voice kabhi drop na ho.
+     */
+    public static AudioPlaybackService startSafe(Context ctx) {
+        Context app = ctx.getApplicationContext();
+        try {
+            Intent i = new Intent(app, AudioPlaybackService.class);
+            if (Build.VERSION.SDK_INT >= 26) {
+                app.startForegroundService(i);
+            } else {
+                app.startService(i);
+            }
+        } catch (Exception e) {
+            try {
+                app.startService(new Intent(app, AudioPlaybackService.class));
+            } catch (Exception ignored) {}
+        }
+        for (int w = 0; w < 20 && get() == null; w++) {
+            try {
+                Thread.sleep(150);
+            } catch (InterruptedException e) {
+                break;
+            }
+        }
+        return get();
+    }
+
     private static class QueueItem {
         String text;
-        CountDownLatch latch; // null = background item (notification), set = wait karna hai
+        CountDownLatch latch; // null = background item, set = wait karna hai
 
         QueueItem(String t, CountDownLatch l) {
             text = t;
@@ -68,36 +110,8 @@ public class AudioPlaybackService extends Service {
     private volatile boolean draining = false;
 
     /**
-     * QUEUE SUSPENSION — jab pipeline (kaam) chal raha hai:
-     *  - notifications (latch==null) RUK JATE HAIN
-     *  - replies (latch set) hamesha play hote hain
-     * Isse kaam khatam hone ke BAAD hi pending messages padhe jaate hain.
-     */
-    private volatile boolean queueSuspended = false;
-
-    public void suspendQueue() {
-        queueSuspended = true;
-    }
-
-    public void resumeQueue() {
-        queueSuspended = false;
-        scheduleDrain(); // abhi bhi kuch pending notifications hain to ab bolo
-    }
-
-    public boolean hasPendingNotifications() {
-        synchronized (queueLock) {
-            for (QueueItem q : queue) {
-                if (q.latch == null) return true;
-            }
-            return false;
-        }
-    }
-
-    /**
      * Android TTS ready hone ka wait (sirf BACKGROUND thread se call karna).
-     * Fish Audio ke liye zaroori nahi — par Fish fail hokar TTS fallback use
-     * hone wala ho to TTS init complete hona chahiye, warna pehli line
-     * chup-chaap drop ho jati hai.
+     * Android TTS init usually 0.5-1s me ho jata hai.
      */
     public boolean waitTtsReady(long timeoutMs) {
         long end = System.currentTimeMillis() + timeoutMs;
@@ -115,8 +129,9 @@ public class AudioPlaybackService extends Service {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        Constants.init(this);
         DeviceUtils.ensureChannels(this);
-        // Android TTS fallback ready karo (simple 2-arg constructor — purane SDK me bhi hai)
+        // Android TTS ready karo (default engine + Fish ka fallback — dono hamesha ready)
         try {
             androidTts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
                 @Override
@@ -125,12 +140,15 @@ public class AudioPlaybackService extends Service {
                 }
             });
             if (androidTts != null) {
-                androidTts.setLanguage(Locale.US);
+                // Hinglish ke liye pehle hi-IN try karo, phir en-IN, phir en-US
+                int r = androidTts.setLanguage(new Locale("hi", "IN"));
+                if (r < 0) r = androidTts.setLanguage(new Locale("en", "IN"));
+                if (r < 0) androidTts.setLanguage(Locale.US);
             }
         } catch (Exception e) {
             Log.e(TAG, "Android TTS init fail", e);
         }
-        Log.i(TAG, "AudioPlaybackService created");
+        Log.i(TAG, "AudioPlaybackService created (engine=" + Constants.TTS_ENGINE + ")");
     }
 
     @Override
@@ -175,22 +193,6 @@ public class AudioPlaybackService extends Service {
         }
     }
 
-    /**
-     * Queue me pehle se rakha hua background item uthao (notification waghera).
-     * Pipeline isse use karta hai: "pehle mera kaam khatam, phir notifications padho"
-     */
-    public String takeNextPending() {
-        synchronized (queueLock) {
-            for (QueueItem q : queue) {
-                if (q.latch == null) {
-                    queue.remove(q);
-                    return q.text;
-                }
-            }
-            return null;
-        }
-    }
-
     /** Kya abhi kuch bol raha hai / queue me kuch hai? */
     public boolean isBusy() {
         synchronized (queueLock) {
@@ -198,7 +200,7 @@ public class AudioPlaybackService extends Service {
         }
     }
 
-    // ═══════════════ QUEUE DRAIN (ek single thread par — MediaPlayer thread-safe) ═══════════════
+    // ═══════════════ QUEUE DRAIN (ek single thread par) ═══════════════
 
     private void scheduleDrain() {
         if (draining) return;
@@ -206,7 +208,7 @@ public class AudioPlaybackService extends Service {
         audioExecutor.submit(() -> {
             try {
                 while (true) {
-                    QueueItem item = pickNextPlayable();
+                    QueueItem item = pickNext();
                     if (item == null) return;
                     playOne(item.text);
                     if (item.latch != null) item.latch.countDown();
@@ -223,33 +225,29 @@ public class AudioPlaybackService extends Service {
         });
     }
 
-    /**
-     * Queue se agla PLAYABLE item uthao:
-     *  - Latch wala (AI reply) hamesha playable
-     *  - Notification (latch==null) tabhi jab queue suspended NAHI ho
-     *  Kuch playable nahi (sab suspended notifications) → null (task khatam)
-     */
-    private QueueItem pickNextPlayable() {
+    private QueueItem pickNext() {
         synchronized (queueLock) {
-            if (queue.isEmpty()) return null;
-            for (QueueItem q : queue) {
-                if (q.latch != null || !queueSuspended) {
-                    queue.remove(q);
-                    return q;
-                }
-            }
-            return null;
+            return queue.isEmpty() ? null : queue.removeFirst();
         }
     }
 
     private void playOne(String text) {
         Log.i(TAG, "Playing: " + (text.length() > 80 ? text.substring(0, 80) + "…" : text));
-        if (playWithFish(text)) return;
-        Log.w(TAG, "Fish fail — Android TTS fallback");
-        playWithAndroidTts(text);
+        boolean preferFish = "fish".equalsIgnoreCase(Constants.TTS_ENGINE);
+        if (preferFish) {
+            if (playWithFish(text)) return;
+            Log.w(TAG, "Fish fail — Android TTS fallback");
+        }
+        if (playWithAndroidTts(text)) return;
+        if (!preferFish) {
+            // Android TTS ready nahi tha (device par engine missing ho sakta hai)
+            Log.w(TAG, "Android TTS fail — Fish try (agar key hai)");
+            if (playWithFish(text)) return;
+        }
+        Log.e(TAG, "Koi bhi TTS fail — line drop");
     }
 
-    // ═══════════════ FISH AUDIO (primary voice) ═══════════════
+    // ═══════════════ FISH AUDIO (premium voice — optional) ═══════════════
 
     private boolean playWithFish(String text) {
         byte[] data = ApiHelper.callFishAudioTTS(text);
@@ -288,9 +286,9 @@ public class AudioPlaybackService extends Service {
         }
     }
 
-    // ═══════════════ ANDROID TTS (fallback — Fish fail ho to) ═══════════════
+    // ═══════════════ ANDROID TTS (default — INSTANT) ═══════════════
 
-    private void playWithAndroidTts(String text) {
+    private boolean playWithAndroidTts(String text) {
         try {
             // TTS ready hone ka thoda intezaar karo
             int wait = 0;
@@ -298,20 +296,22 @@ public class AudioPlaybackService extends Service {
                 Thread.sleep(300);
                 wait++;
             }
-            if (androidTts == null) return;
+            if (androidTts == null) return false;
 
             final CountDownLatch done = new CountDownLatch(1);
             // setUtteranceProgressListener — REFLACTION se set karte hain.
-            // Kyu: kuch (incomplete/partial) android.jar me TextToSpeech par yeh method
-            // missing hota hai to javac "cannot find symbol" deta hai.
-            // Asli phone par method hamesha hota hai, to runtime me sab normal chalega.
+            // Kyu: user ke IDE ke (incomplete/partial) android.jar me TextToSpeech par
+            // yeh method missing hota hai to javac "cannot find symbol" deta hai.
+            // Asli phone par method hamesha hota hai, to runtime me sab normal chalta hai.
             final UtteranceProgressListener upl = new UtteranceProgressListener() {
                 @Override
                 public void onStart(String utteranceId) {}
+
                 @Override
                 public void onDone(String utteranceId) {
                     done.countDown();
                 }
+
                 @Override
                 public void onError(String utteranceId) {
                     done.countDown();
@@ -324,10 +324,16 @@ public class AudioPlaybackService extends Service {
             } catch (Throwable ignored) {
                 // Kisi bhi wajah se set na ho to done.await(60s) hi safety net hai
             }
-            androidTts.speak(text, TextToSpeech.QUEUE_ADD, null, "krishna_" + System.currentTimeMillis());
+            int r = androidTts.speak(text, TextToSpeech.QUEUE_ADD, null, "krishna_" + System.currentTimeMillis());
+            if (r != 0) {
+                done.countDown();
+                return false;
+            }
             done.await(60, TimeUnit.SECONDS);
+            return true;
         } catch (Exception e) {
             Log.e(TAG, "AndroidTTS fail", e);
+            return false;
         }
     }
 
@@ -361,7 +367,7 @@ public class AudioPlaybackService extends Service {
                 .setContentText("Voice ready 🎙️")
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .addAction(new NotificationCompat.Action(0, getString(R.string.notif_stop), stopPi))
+                .addAction(new NotificationCompat.Action.Builder(0, getString(R.string.notif_stop), stopPi).build())
                 .build();
     }
 

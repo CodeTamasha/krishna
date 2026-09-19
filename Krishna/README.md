@@ -1,7 +1,49 @@
 # 🕉️ KRISHNA — AI Voice Assistant (Full Project)
 
 > JARVIS-style personal AI assistant — Hinglish me, OPPO/ColorOS ke liye tuned.
-> Yeh version me pichle saare bugs fix kiye gaye hain.
+
+---
+
+## 🆕 v1.1.0 — MAJOR FIXES (2026-09-19)
+
+| Pichla Problem | Ab Ka Fix |
+|---|---|
+| **Code compile hi nahi ho raha tha** (`ParsedResponse` class do baar define thi — nested + top-level) | Ek hi `ParsedResponse` class — build clean |
+| **Koi app open nahi ho rahi thi** | ⭐ Asli wajah: Android 11+ **package visibility** — `QUERY_ALL_PACKAGES` + `<queries>` add hua. Plus app-open ab **Accessibility service ke bina bhi** chalta hai (`AppLauncher`) |
+| **"TTS bahut late aata tha"** | ⭐ Default engine ab **Android TTS (instant + offline)**. Fish Audio sirf optional (`Constants.TTS_ENGINE = "fish"`). Reply ab memory-save ke **PEHLE** bolta hai — saara Firebase save background me. Har command ke ~8-10 network calls 0-1 ho gaye |
+| **Message aane par turant voice nahi** | Notification listener ab audio service khud start karke **turant** bolti hai ("Boss, WhatsApp par X ka message aaya hai: ...") |
+| **"Kuch accessibility wala nahi ho raha"** par pata nahi chalta tha | ⭐ OPPO accessibility band kare to **notification + voice warning** (watchdog har 60s check karta hai) |
+| **Contact name se call fail** | ⭐ Ab Pehle **Contacts database se direct number** milta hai (`ContactResolver`) — dialer UI-clicking sirf fallback. Calls bhi accessibility ke bina chalti hain |
+| **Messages Firebase me overwrite ho jate the** | Unique message keys (`msg_` + millis + sequence) |
+| **App crash — mic permission na ho to `startForeground` SecurityException** | Permission guard + try-catch (Android 12+) |
+| **Permission naam galat tha** (`MODIFY_AUDIO_STATE`) | `MODIFY_AUDIO_SETTINGS` |
+| **System prompt adhoora load ho sakta tha** (single `read()`) | Poora stream read loop |
+| **Mute app restart par reset** | SharedPreferences persist |
+| **Stop/unmute ke fixed delays (3s/4.5s) — echo risk** | TTS complete hone par hi agla state (deterministic) |
+| **Stats double-count** | Ek hi jagah increment |
+| **Broken GitHub workflow** (`unzip.yml` — zip repo me nahi tha) | Delete |
+| **Gradle Tencent mirror** | Official `services.gradle.org` |
+| **No `.gitignore`** | Added (build/, .gradle, *.apk, .idea waghera) |
+| **Wake word me dead Devanagari entries** | Hatai — sirf Latin variants (STT en-IN Latin me type karta hai) |
+| **Contact call "People" tab nahi milta (Google Dialer)** | "people" + "contacts" dono try |
+| **Chat UI** | User right / Krishna left bubbles + auto-scroll |
+
+**TTS engine badalna** — `app/src/main/java/com/krishna/assistant/Constants.java`:
+```java
+public static final String TTS_ENGINE = "android";  // ⚡ fast + offline (default)
+// public static final String TTS_ENGINE = "fish";  // Fish Audio premium voice (thoda late)
+```
+
+**WhatsApp flow (ab polling-based — phone ki speed ke hisaab se):**
+```
+1. WhatsApp kholo (already khula ho to SKIP)
+2. Search icon click (3 attempts)
+3. "Rupesh" type (Latin script)
+4. ⭐ PEHLA RESULT CLICK — poll: result aane tak wait (max 4s)
+5. ⭐ Chat ka BOTTOM INPUT BOX me message type — poll: box aane tak wait
+6. 1.5s wait (WhatsApp processing)
+7. SEND (3 strategies × 3 retries)
+```
 
 ---
 

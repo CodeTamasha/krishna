@@ -79,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        Constants.init(this);
         DeviceUtils.ensureChannels(this);
 
         tvStatus = findViewById(R.id.tv_status);
@@ -162,12 +163,30 @@ public class MainActivity extends AppCompatActivity {
         else if (st == Constants.STATE_SPEAKING) color = 0xFFFFD700;
         ibMic.setColorFilter(color);
 
-        uiHandler.postDelayed(this::pollStatus, 700);
+        uiHandler.postDelayed(this::pollStatus, 1000);
     }
 
     // ═══════════════ MIC TAP (manual activate / stop) ═══════════════
 
+    private boolean micOk() {
+        // Android 12+ par mic permission ke bina mic-type FGS start = crash
+        if (Build.VERSION.SDK_INT < 31) return true;
+        return hasPerm(Manifest.permission.RECORD_AUDIO);
+    }
+
+    private void requestMicPermission() {
+        Toast.makeText(this, "Mic permission do Boss — warna Krishna sun nahi sakta 🎤",
+                Toast.LENGTH_LONG).show();
+        try {
+            permissionLauncher.launch(new String[]{Manifest.permission.RECORD_AUDIO});
+        } catch (Exception ignored) {}
+    }
+
     private void onMicTap() {
+        if (!micOk()) {
+            requestMicPermission();
+            return;
+        }
         VoiceListenerService v = VoiceListenerService.get();
         if (v == null) {
             VoiceListenerService.setPendingActivate(true);
@@ -202,6 +221,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void doStartAll() {
+        if (!micOk()) {
+            // Android 12+ crash guard — pehle mic permission chahiye
+            requestMicPermission();
+            return;
+        }
         try {
             VoiceListenerService.startServiceSafe(this);
             startForegroundService(new Intent(this, FloatingButtonService.class));
@@ -550,10 +574,15 @@ public class MainActivity extends AppCompatActivity {
                                 LinearLayout.LayoutParams.WRAP_CONTENT,
                                 LinearLayout.LayoutParams.WRAP_CONTENT);
                         lp.width = dp(290);
+                        // ⭐ chat jaisa: user RIGHT, Krishna LEFT (purane code me
+                        // dono side same alignment tha)
+                        lp.gravity = isUser ? Gravity.END : Gravity.START;
                         lp.setMargins(0, dp(4), 0, dp(4));
                         tv.setLayoutParams(lp);
                         llChat.addView(tv);
                     }
+                    // Naya message aaye to seedha neeche scroll
+                    llChat.post(() -> llChat.scrollTo(0, llChat.getBottom()));
                 } catch (Exception ignored) {}
             });
         });

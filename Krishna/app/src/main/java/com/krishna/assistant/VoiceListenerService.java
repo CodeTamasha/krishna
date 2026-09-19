@@ -1,10 +1,12 @@
 package com.krishna.assistant;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
 import android.os.Build;
@@ -33,15 +35,27 @@ import java.util.concurrent.Executors;
  *  [IDLE/WAKE]   → "Hey Krishna" sunte hi WAKE
  *  [LISTENING]   → command suno
  *  [PROCESSING]  → Mercury AI se reply + action
- *  [SPEAKING]    → Fish Audio se bolo
- *  [LISTENING]   → AUTOMATICALLY wapas sunne lago (icon dabane ki zaroorat NAI)
+ *  [SPEAKING]    → TTS bolo (default Android TTS = INSTANT)
+ *  [LISTENING]   → AUTOMATICALLY wapas sunne lago
  *  ... yeh LOOP tab tak chalta hai jab tak user na bole:
  *      "chup ho ja" / "band kar" / "so ja" / "bye"
+ *
+ * v1.1.0 FIXES:
+ *  - MIC PERMISSION GUARD: Android 12+ par mic permission ke bina
+ *    mic-type FGS startForeground SecurityException throw karta tha
+ *    → AB APP CRASH NAHI KAREGI (check + try-catch dono)
+ *  - FAST PIPELINE: reply bolna ab memory-save ke PEHLE hota hai;
+ *    saara Firebase save background me (AudioPlaybackService queue)
+ *  - ACCESSIBILITY WATCHDOG: OPPO accessibility band kare to
+ *    notification + voice warning (warna user ko pata hi nahi chalta
+ *    ki WhatsApp/YouTube kyun fail ho rahe hain)
+ *  - MEMORY WARM-UP: service start hote hi context background me load
+ *  - DETERMINISTIC STOP/MUTE: fixed 3s/4.5s delays ki jagah TTS
+ *    complete hone par hi agla state (echo + timing bugs fix)
  *
  * ECHO/LOOP FIX (puri purani problem isliye thi):
  *  - Krishna BOLTAA WAQT mic POORA BAND (koi recognizer active nahi)
  *  - TTS khatam → 800ms grace → phir mic on
- *  - Isliye wo apni awaaz nahi sunta, baar-baar loop nahi hota
  *
  * APP BAND NA HO (ColorOS fix):
  *  - Foreground service + persistent notification
@@ -68,18 +82,30 @@ public class VoiceListenerService extends Service {
         pendingActivate = v;
     }
 
-    /** Service start karo (safe — killed ho to phir se) */
+    /**
+     * Service start karo (safe — killed ho to phir se).
+     * ⚡ Android 12+ par mic-type foreground service MIC PERMISSION ke
+     * bina start nahi kar sakte (startForeground SecurityException deta
+     * hai → app crash). Isliye pehle permission check.
+     */
     public static void startServiceSafe(Context ctx) {
-        Intent i = new Intent(ctx, VoiceListenerService.class);
+        Context app = ctx.getApplicationContext();
+        if (Build.VERSION.SDK_INT >= 31
+                && app.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                        != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "startServiceSafe: mic permission missing — start nahi kiya");
+            return;
+        }
+        Intent i = new Intent(app, VoiceListenerService.class);
         try {
             if (Build.VERSION.SDK_INT >= 26) {
-                ctx.startForegroundService(i);
+                app.startForegroundService(i);
             } else {
-                ctx.startService(i);
+                app.startService(i);
             }
         } catch (Exception e) {
             try {
-                ctx.startService(i);
+                app.startService(i);
             } catch (Exception e2) {
                 Log.e(TAG, "service start fail", e2);
             }
@@ -104,25 +130,63 @@ public class VoiceListenerService extends Service {
     private ToneGenerator tone;
     private int wakeFailCount = 0;
     private int listenFailCount = 0; // listening mode ke consecutive fails (backoff ke liye)
+    private long lastAccWarnAt = 0;
 
     public VoiceListenerService() {
         // ⚠️ YAHAN KOI CONTEXT KA KAAM NAHI — Android service ka constructor
         // usse pehle chalta hai jab context attach hota hai.
-        // Isliye yahan getApplicationContext() NULL hota hai → NPE crash (line 108).
-        // MemoryManager ab onCreate() me banaya jaata hai.
     }
 
     public boolean isLive() {
         return liveMode;
     }
 
+    /**
+     * ⭐ ACCESSIBILITY WATCHDOG — har 60s check:
+     * OPPO/ColorOS accessibility service chupke se band kar deta hai.
+     * Purane code me user ko pata bhi nahi chalta tha ("kuch accessibility
+     * wala nahi ho raha"). Ab notification + (live mode me) voice warning.
+     */
+    private final Runnable accWatchdog = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                if (KrishnaAccessibilityService.get() == null
+                        && KrishnaAccessibilityService.wasEverConnected()
+                        && System.currentTimeMillis() - lastAccWarnAt > 10 * 60 * 1000L) {
+                    lastAccWarnAt = System.currentTimeMillis();
+                    DeviceUtils.notifyImportant(VoiceListenerService.this,
+                            "⚠️ Krishna ke haath OFF ho gaye",
+                            "Phone ne Krishna ki Accessibility service band kar di hai. "
+                                    + "WhatsApp message, YouTube aur UI controls ke liye "
+                                    + "Settings → Accessibility → Krishna dobara ON karo. "
+                                    + "(Apps kholna aur calls iske bina bhi chalte hain.)");
+                    AudioPlaybackService a = AudioPlaybackService.get();
+                    if (a != null && liveMode && !Constants.isMuted()) {
+                        a.speak("Boss, ek important baat — meri accessibility service band ho gayi hai. "
+                                + "Settings me Accessibility khol ke Krishna on kar lo, "
+                                + "warna WhatsApp aur YouTube ke kaam nahi honge.");
+                    }
+                }
+            } catch (Exception ignored) {}
+            main.postDelayed(this, 60_000);
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
+        Constants.init(getApplicationContext());
         // Ab context ready hai — MemoryManager yahi banate hain
         memory = new MemoryManager(getApplicationContext());
         DeviceUtils.ensureChannels(this);
+
+        // ⚡ CONTEXT WARM-UP — background me Firebase se saara context load,
+        // taaki pehli command bhi instant ho (AI se pehle koi network block nahi)
+        final String warmDeviceId = DeviceUtils.getDeviceId(this);
+        pipeline.submit(() -> memory.warmUp(warmDeviceId));
+
         try {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null) {
@@ -143,12 +207,24 @@ public class VoiceListenerService extends Service {
                 startService(ai);
             }
         } catch (Exception ignored) {}
+        main.postDelayed(accWatchdog, 30_000);
         Log.i(TAG, "VoiceListenerService created");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(100, buildNotification());
+        // ⚡ CRASH GUARD: Android 12+ par mic permission missing ho to
+        // startForeground SecurityException throw karta hai. Purane code me
+        // yeh try-catch me nahi tha → app crash. Ab safe.
+        try {
+            startForeground(100, buildNotification());
+        } catch (Exception e) {
+            Log.e(TAG, "startForeground fail — service stop", e);
+            try {
+                stopSelf();
+            } catch (Exception ignored) {}
+            return START_NOT_STICKY;
+        }
         if (intent != null && "STOP".equals(intent.getStringExtra("ACTION"))) {
             stopConversationLoop();
             stopSelf();
@@ -289,14 +365,9 @@ public class VoiceListenerService extends Service {
 
     private boolean attachSttListener(final SpeechRecognizer rec) {
         try {
-            // TARIKA 1 (reliable): interface ka Class object naam se (Class.forName)
-            // dhoondhne ki jagah SpeechRecognizer.class ke public methods me se
+            // TARIKA 1 (reliable): SpeechRecognizer.class ke public methods me se
             // "setRecognitionListener" dhundho — uska parameter type hi wahi
             // RecognitionListener interface hai.
-            // Kyu: is OPPO device par Class.forName("...SpeechRecognizer$RecognitionListener")
-            // ClassNotFoundException de raha tha (nested class by-name load nahi ho rha),
-            // lekin SpeechRecognizer class khud chal rahi hai — isliye method signature se
-            // interface milna 100% reliable hai.
             Method setter = null;
             for (Method m : SpeechRecognizer.class.getMethods()) {
                 if ("setRecognitionListener".equals(m.getName())) {
@@ -395,7 +466,7 @@ public class VoiceListenerService extends Service {
         try {
             listenFailCount = 0; // recognizer theek se chala — backoff reset
             String text = joinResults(results);
-            Log.i(TAG, "Recognizer result: \"" + text + "\" state=" + state);
+            if (BuildConfig.DEBUG) Log.i(TAG, "Recognizer result: \"" + text + "\" state=" + state);
             if (state == Constants.STATE_WAKE) {
                 if (isWakeWord(text)) {
                     onWakeDetected();
@@ -464,15 +535,19 @@ public class VoiceListenerService extends Service {
             return;
         }
         String t = text.trim();
-        Log.i(TAG, "🎤 Command: " + t);
+        if (BuildConfig.DEBUG) Log.i(TAG, "🎤 Command: " + t);
 
         // STOP phrases → live mode band
+        // ⚡ DETERMINISTIC: goodbye BOL ke khatam hone par hi wake mode (purana
+        //    fixed 4500ms delay TTS se fast/slow dono case me galat hota tha)
         if (isStopCommand(t)) {
             state = Constants.STATE_STOPPING;
             liveMode = false;
             final String goodbye = "Theek hai Boss, main so raha hoon. Jab zaroorat ho to 'Hey Krishna' bolna.";
-            pipeline.submit(() -> speakNow(goodbye));
-            main.postDelayed(this::beginWake, 4500);
+            pipeline.submit(() -> {
+                speakNow(goodbye);
+                main.post(this::beginWake);
+            });
             return;
         }
         // MUTE
@@ -484,8 +559,10 @@ public class VoiceListenerService extends Service {
         if (isMuteOffCommand(t)) {
             Constants.setMuted(false);
             state = Constants.STATE_SPEAKING;
-            pipeline.submit(() -> speakNow("Mute hata diya Boss, ab main bolunga."));
-            main.postDelayed(this::beginCommandListening, 3000);
+            pipeline.submit(() -> {
+                speakNow("Mute hata diya Boss, ab main bolunga.");
+                continueConversation();
+            });
             return;
         }
 
@@ -494,45 +571,12 @@ public class VoiceListenerService extends Service {
         pipeline.submit(() -> runPipeline(t));
     }
 
-    /**
-     * AudioPlaybackService guaranteed chalu karo (sirf BACKGROUND thread se call karo).
-     * KYU: mic button / wake word se sirf VoiceListenerService start hota tha —
-     * audio service khud start nahi hoti thi, isliye Krishna "bol raha hoon"
-     * state me aata tha lekin koi awaaz nahi aati thi aur turant "sun raha hoon"
-     * ho jata tha. Ab service auto-start + ready wait karta hai.
-     */
-    private AudioPlaybackService ensureAudio() {
-        AudioPlaybackService a = AudioPlaybackService.get();
-        if (a != null) return a;
-        try {
-            Intent i = new Intent(this, AudioPlaybackService.class);
-            if (Build.VERSION.SDK_INT >= 26) {
-                startForegroundService(i);
-            } else {
-                startService(i);
-            }
-        } catch (Exception e) {
-            try {
-                startService(new Intent(this, AudioPlaybackService.class));
-            } catch (Exception ignored) {}
-        }
-        // Instance ready hone ka wait (onCreate/onStartCommand me set hota hai)
-        for (int w = 0; w < 20 && AudioPlaybackService.get() == null; w++) {
-            try {
-                Thread.sleep(200);
-            } catch (InterruptedException e) {
-                break;
-            }
-        }
-        return AudioPlaybackService.get();
-    }
-
     /** Koi line bolo — audio service auto-start + TTS ready wait (bg thread se) */
     private void speakNow(String text) {
         try {
-            AudioPlaybackService a = ensureAudio();
+            AudioPlaybackService a = AudioPlaybackService.startSafe(this);
             if (a != null) {
-                a.waitTtsReady(3000);
+                a.waitTtsReady(2000);
                 a.speakBlocking(text);
             }
         } catch (Exception e) {
@@ -540,78 +584,79 @@ public class VoiceListenerService extends Service {
         }
     }
 
+    /**
+     * ⚡ FAST PIPELINE (v1.1.0):
+     *   1. buildContext — 100% LOCAL (warm cache) — zero network
+     *   2. Mercury AI call (yahi sabse lamba step hai)
+     *   3. Action execute
+     *   4. ⭐ REPLY Bolo — memory-save SE PEHLE (purane code me yahan
+     *      8-10 Firebase calls block karte the → "sab slow" lagta tha)
+     *   5. Memory save — BACKGROUND me (voice ko block nahi karta)
+     */
     private void runPipeline(String userText) {
-        Log.i(TAG, "🔄 Pipeline start: " + userText);
+        if (BuildConfig.DEBUG) Log.i(TAG, "🔄 Pipeline start: " + userText);
         // Audio service guaranteed chalu karo — warna reply sunai nahi dega
-        AudioPlaybackService audio = ensureAudio();
-        String deviceId = DeviceUtils.getDeviceId(this);
-        // Notifications ko RUKAO — kaam khatam hone ke baad padha jayega
-        if (audio != null) audio.suspendQueue();
+        final AudioPlaybackService audio = AudioPlaybackService.startSafe(this);
+        final String deviceId = DeviceUtils.getDeviceId(this);
         try {
             acquireWakeLock();
 
-            // 1️⃣ MERCURY AI se reply lao
+            // 1️⃣ CONTEXT (local — instant)
             List<ChatMessage> ctx = memory.buildContext(deviceId, userText);
+
+            // 2️⃣ MERCURY AI se reply lao
             String reply = ApiHelper.callMercuryAI(ctx);
             if (reply == null) {
-                if (audio != null) {
-                    audio.speakBlocking("Mujhe thodi dikkat ho rahi hai Boss, ek baar phir try karta hoon.");
-                }
+                speakVia(audio, "Mujhe thodi dikkat ho rahi hai Boss, ek baar phir try karo.");
                 continueConversation();
                 return;
             }
 
-            // 2️⃣ Response parse karo (text + action)
-            ParsedResponse parsed = CommandParser.parse(reply);
+            // 3️⃣ Response parse karo (text + action)
+            final ParsedResponse parsed = CommandParser.parse(reply);
 
-            // 3️⃣ Action execute karo (agar mila)
+            // 4️⃣ Action execute karo (agar mila)
             boolean actionOk = true;
+            boolean explained = false;
             if (parsed.isAction) {
                 try {
                     ActionExecutor executor = new ActionExecutor(this);
                     actionOk = executor.execute(parsed);
+                    explained = executor.wasExplained();
                 } catch (Exception e) {
                     Log.e(TAG, "action execute fail", e);
                     actionOk = false;
                 }
             }
 
-            // 4️⃣ Memory me save karo (facts + compression)
+            // 5️⃣ ⭐ REPLY Bolo (abhi — memory save pehle nahi block karega)
+            state = Constants.STATE_SPEAKING;
+            speakVia(audio, parsed.spokenText);
+            if (!actionOk && !explained) {
+                speakVia(audio, "Boss, ek kaam nahi ho paya. Phir try karo ya manually kar lo.");
+            }
+
+            // 6️⃣ MEMORY SAVE — background me (facts + compression)
             try {
-                memory.afterExchange(deviceId, userText, reply, parsed.isAction ? parsed.action : null);
+                memory.afterExchange(deviceId, userText, reply,
+                        parsed.isAction ? parsed.action : null);
             } catch (Exception e) {
                 Log.e(TAG, "memory save fail", e);
-            }
-
-            // 5️⃣ Reply bolo (Fish Audio)
-            state = Constants.STATE_SPEAKING;
-            if (audio != null) {
-                audio.speakBlocking(parsed.spokenText);
-            }
-            if (!actionOk && audio != null) {
-                audio.speakBlocking("Boss, ekam kaam nahi ho paya. Phir try karo ya manually kar lo.");
-            }
-
-            // 6️⃣ BAAT KATME KE BAAD pending notifications padho
-            //    (user ne kaha: bich me aaye to pehle kaam karo, phir message padho)
-            state = Constants.STATE_SPEAKING;
-            String pending;
-            int guard = 0;
-            while (audio != null && guard < 5 && (pending = audio.takeNextPending()) != null) {
-                audio.speakBlocking(pending);
-                guard++;
             }
 
             continueConversation();
         } catch (Exception e) {
             Log.e(TAG, "pipeline fail", e);
-            if (audio != null) {
-                audio.speakBlocking("Kuch gadbad ho gayi Boss, phir try karo.");
-            }
+            speakVia(audio, "Kuch gadbad ho gayi Boss, phir try karo.");
             continueConversation();
         } finally {
-            if (audio != null) audio.resumeQueue();
             releaseWakeLock();
+        }
+    }
+
+    private void speakVia(AudioPlaybackService audio, String text) {
+        if (audio != null) {
+            audio.speakBlocking(text);
         }
     }
 
@@ -700,13 +745,14 @@ public class VoiceListenerService extends Service {
                 .setContentText("Listening for commands")
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .addAction(new NotificationCompat.Action(0, getString(R.string.notif_stop), stopPi))
+                .addAction(new NotificationCompat.Action.Builder(0, getString(R.string.notif_stop), stopPi).build())
                 .build();
     }
 
     @Override
     public void onDestroy() {
         Log.i(TAG, "VoiceListenerService onDestroy");
+        main.removeCallbacks(accWatchdog);
         stopRecognizers();
         liveMode = false;
         state = Constants.STATE_IDLE;

@@ -58,6 +58,7 @@ public class ApiHelper {
                 body.addProperty("model", Constants.MERCURY_MODEL);
                 body.addProperty("reasoning_effort", "low");
                 body.addProperty("max_tokens", Constants.MERCURY_MAX_TOKENS);
+                body.addProperty("temperature", Constants.MERCURY_TEMPERATURE);
                 JsonArray arr = new JsonArray();
                 for (ChatMessage m : messages) {
                     JsonObject mm = new JsonObject();
