@@ -1,43 +1,32 @@
-name: Unzip Project
+name: Extract project ZIP
 
 on:
-  push:
-    paths:
-      - "*.zip"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  unzip:
+  extract:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
 
       - name: Extract ZIP
         run: |
-          mkdir -p extracted
-          unzip -o *.zip -d extracted
+          unzip -o Krishna_FULL_LATEST.zip -d temp
 
-      - name: Remove ZIP
-        run: rm -f *.zip
+          cp -r temp/Krishna/. .
 
-      - name: Move extracted files
-        run: |
-          shopt -s dotglob
-          cp -r extracted/* .
-          rm -rf extracted
+          rm -rf temp
+          rm -f Krishna_FULL_LATEST.zip
 
-      - name: Commit extracted files
+      - name: Commit changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "Extract project ZIP" || echo "Nothing to commit"
+          git add -A
+          git commit -m "Move project to repository root" || echo "Nothing to commit"
           git push
